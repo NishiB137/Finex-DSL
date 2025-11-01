@@ -1,0 +1,149 @@
+ASTNode (abstract base)
+│   ├── line: int
+│   └── column: int
+│
+├── TypeNode
+│   ├── Built-in types: INT, REAL, CHAR, STRING, BOOL, DATETIME, AMOUNT, VOID
+│   ├── USER_DEFINED (for record/label types)
+│   ├── GENERIC (for containers like list<int>)
+│   └── genericArgs: vector<TypeNode*> (for generics)
+│
+├── ExpressionNode (abstract)
+│   ├── resolvedType: TypeNode* (semantic analysis annotation)
+│   │
+│   ├── BinaryOpNode
+│   │   ├── Arithmetic: ADD, SUB, MUL, DIV, INT_DIV, MOD, POW
+│   │   ├── Comparison: EQ, NEQ, TEQ, GT, LT, GEQ, LEQ
+│   │   ├── Logical: AND, OR
+│   │   ├── Membership: IN
+│   │   └── COMMA
+│   │
+│   ├── UnaryOpNode
+│   │   ├── PLUS (unary +)
+│   │   ├── MINUS (unary -)
+│   │   └── NOT (logical not)
+│   │
+│   ├── AssignmentNode
+│   │   └── ASSIGN, PLUS_ASSIGN, MINUS_ASSIGN, MULT_ASSIGN, etc.
+│   │
+│   ├── CastNode
+│   │   ├── targetType: TypeNode*
+│   │   └── expression: ExpressionNode*
+│   │
+│   ├── IdentifierNode
+│   │   └── name: string
+│   │
+│   ├── LiteralNode
+│   │   ├── INT, REAL, STRING, CHAR, BOOL, AMOUNT, DATETIME
+│   │   └── value: string
+│   │
+│   ├── FunctionCallNode
+│   │   ├── function: ExpressionNode*
+│   │   └── arguments: vector<ExpressionNode*>
+│   │
+│   ├── MemberAccessNode
+│   │   ├── ARROW (->)
+│   │   ├── DOUBLE_COLON (::)
+│   │   ├── object: ExpressionNode*
+│   │   └── member: string
+│   │
+│   ├── SubscriptNode
+│   │   ├── array: ExpressionNode*
+│   │   └── index: ExpressionNode*
+│   │
+│   └── InitializerListNode
+│       └── elements: vector<ExpressionNode*>
+│
+├── StatementNode (abstract)
+│   ├── CompoundStatementNode
+│   │   └── statements: vector<ASTNode*>
+│   │
+│   ├── ExpressionStatementNode
+│   │   └── expression: ExpressionNode*
+│   │
+│   ├── IfStatementNode
+│   │   ├── condition: ExpressionNode*
+│   │   ├── thenBranch: StatementNode*
+│   │   └── elseBranch: StatementNode* (optional)
+│   │
+│   ├── WhileStatementNode
+│   │   ├── condition: ExpressionNode*
+│   │   └── body: StatementNode*
+│   │
+│   ├── ForStatementNode
+│   │   ├── C_STYLE
+│   │   │   ├── init: ExpressionNode*
+│   │   │   ├── condition: ExpressionNode*
+│   │   │   └── update: ExpressionNode*
+│   │   ├── FINEX_RANGE
+│   │   │   ├── varType: TypeNode*
+│   │   │   ├── varName: string
+│   │   │   ├── startExpr: ExpressionNode*
+│   │   │   ├── endExpr: ExpressionNode*
+│   │   │   └── stepExpr: ExpressionNode*
+│   │   └── FOR_IN
+│   │       ├── varType: TypeNode*
+│   │       ├── varName: string
+│   │       └── collection: ExpressionNode*
+│   │
+│   ├── JumpStatementNode
+│   │   ├── BREAK
+│   │   ├── CONTINUE
+│   │   ├── RETURN (with optional returnValue)
+│   │   └── THROW (with optional returnValue)
+│   │
+│   ├── TryCatchStatementNode
+│   │   ├── tryBlock: CompoundStatementNode*
+│   │   ├── exceptionType: TypeNode*
+│   │   ├── exceptionVar: string
+│   │   └── catchBlock: CompoundStatementNode*
+│   │
+│   └── CheckStatementNode
+│       └── condition: ExpressionNode*
+│
+├── DeclaratorNode
+│   ├── SIMPLE (identifier)
+│   ├── ARRAY (with dimensions)
+│   └── FUNCTION (with parameters)
+│
+├── ParameterNode
+│   ├── type: TypeNode*
+│   ├── declarator: DeclaratorNode*
+│   ├── isModifiable: bool
+│   └── defaultValue: ExpressionNode* (optional)
+│
+├── DeclarationNode
+│   ├── storageClass: NONE, EXTERN, STATIC
+│   ├── typeQualifier: NO_QUAL, CONST, NONNEG
+│   ├── type: TypeNode*
+│   └── declarators: vector<Declarator>
+│       └── Declarator { declarator, initializer }
+│
+├── FunctionDefinitionNode
+│   ├── returnType: TypeNode*
+│   ├── declarator: DeclaratorNode*
+│   ├── body: CompoundStatementNode*
+│   ├── storageClass
+│   └── typeQualifier
+│
+├── RecordDefinitionNode (struct/record)
+│   ├── name: string
+│   └── members: vector<ASTNode*> (DeclarationNode or FunctionDefinitionNode)
+│
+├── LabelDefinitionNode (enum)
+│   ├── name: string
+│   └── values: vector<string>
+│
+├── ImportStatementNode
+│   └── libraryName: string
+│
+├── MacroDefinitionNode
+│   ├── name: string
+│   └── value: ExpressionNode*
+│
+├── TypeAliasNode
+│   ├── alias: string
+│   └── originalType: TypeNode*
+│
+└── ProgramNode (root)
+    └── declarations: vector<ASTNode*>
