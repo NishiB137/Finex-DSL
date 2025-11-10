@@ -11,6 +11,7 @@
 %}
 
 %option yylineno
+%option nounput
 
 INT        [0-9]+
 REAL       ([0-9]+[eE][+-]?[0-9]+)|(([0-9]*\.[0-9]+|[0-9]+\.[0-9]*)([eE][+-]?[0-9]+)?)
@@ -29,7 +30,7 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 "bool"             { count(); yylval.type = BOOL_T; return BOOL_T; }
 "datetime"         { count(); yylval.type = DATETIME_T; return DATETIME_T; }
 "amount"           { count(); yylval.type = AMOUNT_T; return AMOUNT_T; }
-"record"           { count(); yylval.type = RECORD; return RECORD; }     
+"record"           { count(); yylval.type = RECORD; return RECORD; }    
 "label"            { count(); yylval.type = LABEL; return LABEL; }
 "if"               { count(); return IF; }
 "else"             { count(); return ELSE; }
@@ -54,7 +55,7 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 "extern"           { count(); return EXTERN; }
 "static"           { count(); return STATIC; }
 "using"            { count(); return USING; }  
-"define"            { count(); return DEFINE; }  
+"define"            { count(); return DEFINE; }
 "true"             { count(); yylval.str = strdup(yytext); return BOOL_LITERAL; }
 "false"            { count(); yylval.str = strdup(yytext); return BOOL_LITERAL; }
 "+"                { count(); return ('+'); }
@@ -96,7 +97,7 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 ";"                { count(); return (';'); }
 ","                { count(); return (','); }
 ":"                { count(); return (':'); }
-"::"               { count(); return DCOLON; } 
+"::"               { count(); return DCOLON; }
 
 {IMPORT_LIB}       { count(); yylval.str = strdup(yytext); return IMPORT_LIB; }
 {DATETIME}         { count(); yylval.str = strdup(yytext); return DATETIME_LITERAL; }
@@ -134,7 +135,7 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 
 [ \t\r\n]+                  { count(); }
 \/\#([^\#]|\#+[^\/])*\#\/   { count(); }    /* multi line comments */
-"##".*                      { count(); }   /* single line*/
+"##".* { count(); }   /* single line*/
 .                           { printf("Unknown token: %s at line %d, column %d\n", yytext, yylineno, columnno); }
 %%
 

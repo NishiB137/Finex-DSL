@@ -11,15 +11,18 @@
     #include <string.h>
     #include <stdbool.h>
     #include <iostream>
-    #include <vector>    
-    #include <memory>    
-    #include "ast.hpp"   
+    #include <vector>
+    #include <memory>
+    #include "ast.hpp"
+    #include "symbol_table.hpp"
+    #include "semantic_analyzer.hpp"
     
     void yyerror(const char *s);
     int yylex();
 
     extern FILE* yyin;
     extern int yylineno;
+    extern int columnno; // Read column number from lexer
     
     // Root of the AST
     ProgramNode* root = nullptr;
@@ -54,6 +57,16 @@
                 return true;
         }
         return false;
+    }
+
+    // Helper to set location info on a node
+    template<typename T>
+    T* setLoc(T* node) {
+        if (node) {
+            node->line = yylineno;
+            node->column = columnno;
+        }
+        return node;
     }
 %}
 
@@ -112,7 +125,7 @@
 
 /* Non-terminals */
 %type <program> program
-%type <node> external_declaration block_item struct_declaration
+%type <node> external_declaration block_item struct_declaration using_declaration
 %type <importStmt> import_statement
 %type <macroDef> macro_definition
 %type <decl> declaration
@@ -182,27 +195,36 @@ program
 external_declaration
     : import_statement { $$ = $1; }
     | macro_definition { $$ = $1; }
+    | using_declaration { $$ = $1; }
     | declaration { $$ = $1; }
     | function_definition { $$ = $1; }
     ;
 
 import_statement
     : IMPORT_LIB ';' {
-        $$ = new ImportStatementNode($1);
+        $$ = setLoc(new ImportStatementNode($1));
         free($1);
     }
     ;
 
 macro_definition
     : DEFINE IDENTIFIER AS expression ';' {
-        $$ = new MacroDefinitionNode($2, std::unique_ptr<ExpressionNode>($4));
+        $$ = setLoc(new MacroDefinitionNode($2, std::unique_ptr<ExpressionNode>($4)));
         free($2);
+    }
+    ;
+
+using_declaration
+    : USING type_specifier AS IDENTIFIER ';' {
+        $$ = setLoc(new TypeAliasNode($4, std::unique_ptr<TypeNode>($2)));
+        add_type_name($4);
+        free($4);
     }
     ;
 
 declaration
     : declaration_specifiers ';' {
-        $$ = new DeclarationNode();
+        $$ = setLoc(new DeclarationNode());
         if ($1.storageClass & (1 << 16)) $$->storageClass = DeclarationNode::EXTERN;
         else if ($1.storageClass & (1 << 17)) $$->storageClass = DeclarationNode::STATIC;
         
@@ -212,7 +234,7 @@ declaration
         $$->type = std::unique_ptr<TypeNode>($1.type);
     }
     | declaration_specifiers init_declarator_list ';' {
-        $$ = new DeclarationNode();
+        $$ = setLoc(new DeclarationNode());
         if ($1.storageClass & (1 << 16)) $$->storageClass = DeclarationNode::EXTERN;
         else if ($1.storageClass & (1 << 17)) $$->storageClass = DeclarationNode::STATIC;
         
@@ -244,17 +266,17 @@ type_qualifier
     ;
 
 type_specifier
-    : INT_T { $$ = new TypeNode(TypeNode::INT); }
-    | REAL_T { $$ = new TypeNode(TypeNode::REAL); }
-    | CHAR_T { $$ = new TypeNode(TypeNode::CHAR); }
-    | STRING_T { $$ = new TypeNode(TypeNode::STRING); }
-    | BOOL_T { $$ = new TypeNode(TypeNode::BOOL); }
-    | DATETIME_T { $$ = new TypeNode(TypeNode::DATETIME); }
-    | AMOUNT_T { $$ = new TypeNode(TypeNode::AMOUNT); }
-    | VOID { $$ = new TypeNode(TypeNode::VOID); }
+    : INT_T { $$ = setLoc(new TypeNode(TypeNode::INT)); }
+    | REAL_T { $$ = setLoc(new TypeNode(TypeNode::REAL)); }
+    | CHAR_T { $$ = setLoc(new TypeNode(TypeNode::CHAR)); }
+    | STRING_T { $$ = setLoc(new TypeNode(TypeNode::STRING)); }
+    | BOOL_T { $$ = setLoc(new TypeNode(TypeNode::BOOL)); }
+    | DATETIME_T { $$ = setLoc(new TypeNode(TypeNode::DATETIME)); }
+    | AMOUNT_T { $$ = setLoc(new TypeNode(TypeNode::AMOUNT)); }
+    | VOID { $$ = setLoc(new TypeNode(TypeNode::VOID)); }
     | user_type_specifier { $$ = $1; }
     | TYPE_NAME LT type_argument_list GT %prec ANGULAR_BRACKS {
-        $$ = new TypeNode($1);
+        $$ = setLoc(new TypeNode($1));
         $$->kind = TypeNode::GENERIC;
         $$->genericArgs = std::move(*$3);
         delete $3;
@@ -265,7 +287,7 @@ type_specifier
 user_type_specifier 
     : record_specifier { $$ = $1; }
     | label_specifier { $$ = $1; }
-    | TYPE_NAME { $$ = new TypeNode($1); free($1); }   
+    | TYPE_NAME { $$ = setLoc(new TypeNode($1)); free($1); }   
     ;
 
 type_argument_list
@@ -283,23 +305,25 @@ record_specifier
     : RECORD IDENTIFIER record_body {
         add_type_name($2);
         RecordDefinitionNode* def = new RecordDefinitionNode($2);
+        setLoc(def);
         def->members = std::move(*$3);
         delete $3;
         extra_defs.push_back(std::unique_ptr<ASTNode>(def));
-        $$ = new TypeNode($2);
+        $$ = setLoc(new TypeNode($2));
         free($2);
     }
     | RECORD IDENTIFIER {
         add_type_name($2);
-        $$ = new TypeNode($2);
+        $$ = setLoc(new TypeNode($2));
         free($2);
     }
     | RECORD record_body {
         RecordDefinitionNode* def = new RecordDefinitionNode("anonymous");
+        setLoc(def);
         def->members = std::move(*$2);
         delete $2;
         extra_defs.push_back(std::unique_ptr<ASTNode>(def));
-        $$ = new TypeNode("anonymous");
+        $$ = setLoc(new TypeNode("anonymous"));
     }
     ;
 
@@ -326,24 +350,26 @@ struct_declaration
 label_specifier
     : LABEL IDENTIFIER {
         add_type_name($2);
-        $$ = new TypeNode($2);
+        $$ = setLoc(new TypeNode($2));
         free($2);
     }
     | LABEL IDENTIFIER label_body {
         add_type_name($2);
         LabelDefinitionNode* def = new LabelDefinitionNode($2);
+        setLoc(def);
         def->values = std::move(*$3);
         delete $3;
         extra_defs.push_back(std::unique_ptr<ASTNode>(def));
-        $$ = new TypeNode($2);
+        $$ = setLoc(new TypeNode($2));
         free($2);
     }
     | LABEL label_body {
         LabelDefinitionNode* def = new LabelDefinitionNode("anonymous");
+        setLoc(def);
         def->values = std::move(*$2);
         delete $2;
         extra_defs.push_back(std::unique_ptr<ASTNode>(def));
-        $$ = new TypeNode("anonymous");
+        $$ = setLoc(new TypeNode("anonymous"));
     }
     ;
 
@@ -397,12 +423,14 @@ initializer
     : assignment_expression { $$ = $1; }
     | '{' initializer_list '}' {
         InitializerListNode* init = new InitializerListNode();
+        setLoc(init);
         init->elements = std::move(*$2);
         delete $2;
         $$ = init;
     }
     | '{' initializer_list ',' '}' {
         InitializerListNode* init = new InitializerListNode();
+        setLoc(init);
         init->elements = std::move(*$2);
         delete $2;
         $$ = init;
@@ -422,7 +450,7 @@ initializer_list
 
 declarator
     : IDENTIFIER {
-        $$ = new DeclaratorNode($1, DeclaratorNode::SIMPLE);
+        $$ = setLoc(new DeclaratorNode($1, DeclaratorNode::SIMPLE));
         free($1);
     }
     | '(' declarator ')' { $$ = $2; }
@@ -450,9 +478,9 @@ declarator
 expression
     : assignment_expression { $$ = $1; }
     | expression ',' assignment_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::COMMA, 
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::COMMA, 
                               std::unique_ptr<ExpressionNode>($1),
-                              std::unique_ptr<ExpressionNode>($3));
+                              std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
@@ -471,9 +499,9 @@ assignment_expression
             case 7: op = AssignmentNode::POWER_ASSIGN; break;
             default: op = AssignmentNode::ASSIGN;
         }
-        $$ = new AssignmentNode(op, 
+        $$ = setLoc(new AssignmentNode(op, 
                                std::unique_ptr<ExpressionNode>($1),
-                               std::unique_ptr<ExpressionNode>($3));
+                               std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
@@ -491,117 +519,117 @@ assignment_operator
 logical_or_expression
     : logical_and_expression { $$ = $1; }
     | logical_or_expression OR logical_and_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::OR,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::OR,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
 logical_and_expression
     : membership_expression { $$ = $1; }
     | logical_and_expression AND membership_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::AND,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::AND,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
 membership_expression
     : equality_expression { $$ = $1; }
     | equality_expression IN equality_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::IN,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::IN,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
 equality_expression
     : relational_expression { $$ = $1; }
     | equality_expression EQ relational_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::EQ,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::EQ,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | equality_expression NEQ relational_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::NEQ,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::NEQ,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | equality_expression TEQ relational_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::TEQ,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::TEQ,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
 relational_expression
     : additive_expression { $$ = $1; }
     | relational_expression GT additive_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::GT,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::GT,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | relational_expression LT additive_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::LT,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::LT,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | relational_expression GEQ additive_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::GEQ,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::GEQ,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | relational_expression LEQ additive_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::LEQ,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::LEQ,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
 additive_expression
     : multiplicative_expression { $$ = $1; }
     | additive_expression '+' multiplicative_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::ADD,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::ADD,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | additive_expression '-' multiplicative_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::SUB,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::SUB,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
 multiplicative_expression
     : exponential_expression { $$ = $1; }
     | multiplicative_expression '*' exponential_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::MUL,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::MUL,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | multiplicative_expression '/' exponential_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::DIV,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::DIV,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | multiplicative_expression INT_DIV exponential_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::INT_DIV,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::INT_DIV,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     | multiplicative_expression '%' exponential_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::MOD,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::MOD,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
 exponential_expression
     : cast_expression { $$ = $1; }
     | cast_expression '^' exponential_expression {
-        $$ = new BinaryOpNode(BinaryOpNode::POW,
+        $$ = setLoc(new BinaryOpNode(BinaryOpNode::POW,
                              std::unique_ptr<ExpressionNode>($1),
-                             std::unique_ptr<ExpressionNode>($3));
+                             std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
@@ -612,8 +640,8 @@ cast_expression
             yyerror("Cast requires a type specifier");
             $2.type = new TypeNode(TypeNode::INT); 
         }
-        $$ = new CastNode(std::unique_ptr<TypeNode>($2.type),
-                         std::unique_ptr<ExpressionNode>($4));
+        $$ = setLoc(new CastNode(std::unique_ptr<TypeNode>($2.type),
+                         std::unique_ptr<ExpressionNode>($4)));
     }
     ;
 
@@ -646,74 +674,75 @@ specifier_qualifier_list
 unary_expression
     : postfix_expression { $$ = $1; }
     | '+' cast_expression %prec UPLUS {
-        $$ = new UnaryOpNode(UnaryOpNode::PLUS, std::unique_ptr<ExpressionNode>($2));
+        $$ = setLoc(new UnaryOpNode(UnaryOpNode::PLUS, std::unique_ptr<ExpressionNode>($2)));
     }
     | '-' cast_expression %prec UMINUS {
-        $$ = new UnaryOpNode(UnaryOpNode::MINUS, std::unique_ptr<ExpressionNode>($2));
+        $$ = setLoc(new UnaryOpNode(UnaryOpNode::MINUS, std::unique_ptr<ExpressionNode>($2)));
     }
     | NOT cast_expression %prec NOT {
-        $$ = new UnaryOpNode(UnaryOpNode::NOT, std::unique_ptr<ExpressionNode>($2));
+        $$ = setLoc(new UnaryOpNode(UnaryOpNode::NOT, std::unique_ptr<ExpressionNode>($2)));
     }
     ;
 
 postfix_expression
     : primary_expression { $$ = $1; }
     | postfix_expression DCOLON IDENTIFIER {
-        $$ = new MemberAccessNode(MemberAccessNode::DOUBLE_COLON,
-                                 std::unique_ptr<ExpressionNode>($1), $3);
+        $$ = setLoc(new MemberAccessNode(MemberAccessNode::DOUBLE_COLON,
+                                 std::unique_ptr<ExpressionNode>($1), $3));
         free($3);
     }
     | postfix_expression '(' ')' {
-        $$ = new FunctionCallNode(std::unique_ptr<ExpressionNode>($1));
+        $$ = setLoc(new FunctionCallNode(std::unique_ptr<ExpressionNode>($1)));
     }
     | postfix_expression '(' argument_expression_list ')' {
         FunctionCallNode* func = new FunctionCallNode(std::unique_ptr<ExpressionNode>($1));
+        setLoc(func);
         func->arguments = std::move(*$3);
         delete $3;
         $$ = func;
     }
     | postfix_expression '[' expression ']' {
-        $$ = new SubscriptNode(std::unique_ptr<ExpressionNode>($1),
-                              std::unique_ptr<ExpressionNode>($3));
+        $$ = setLoc(new SubscriptNode(std::unique_ptr<ExpressionNode>($1),
+                              std::unique_ptr<ExpressionNode>($3)));
     }
     | postfix_expression ARROW IDENTIFIER {
-        $$ = new MemberAccessNode(MemberAccessNode::ARROW,
-                                 std::unique_ptr<ExpressionNode>($1), $3);
+        $$ = setLoc(new MemberAccessNode(MemberAccessNode::ARROW,
+                                 std::unique_ptr<ExpressionNode>($1), $3));
         free($3);
     }
     ;
 
 primary_expression
     : IDENTIFIER {
-        $$ = new IdentifierNode($1);
+        $$ = setLoc(new IdentifierNode($1));
         free($1);
     }
     | INT_LITERAL {
-        $$ = new LiteralNode(LiteralNode::INT, $1);
+        $$ = setLoc(new LiteralNode(LiteralNode::INT, $1));
         free($1);
     }
     | REAL_LITERAL {
-        $$ = new LiteralNode(LiteralNode::REAL, $1);
+        $$ = setLoc(new LiteralNode(LiteralNode::REAL, $1));
         free($1);
     }
     | STRING_LITERAL {
-        $$ = new LiteralNode(LiteralNode::STRING, $1);
+        $$ = setLoc(new LiteralNode(LiteralNode::STRING, $1));
         free($1);
     }
     | CHAR_LITERAL {
-        $$ = new LiteralNode(LiteralNode::CHAR, $1);
+        $$ = setLoc(new LiteralNode(LiteralNode::CHAR, $1));
         free($1);
     }
     | BOOL_LITERAL {
-        $$ = new LiteralNode(LiteralNode::BOOL, $1);
+        $$ = setLoc(new LiteralNode(LiteralNode::BOOL, $1));
         free($1);
     }
     | AMOUNT_LITERAL {
-        $$ = new LiteralNode(LiteralNode::AMOUNT, $1);
+        $$ = setLoc(new LiteralNode(LiteralNode::AMOUNT, $1));
         free($1);
     }
     | DATETIME_LITERAL {
-        $$ = new LiteralNode(LiteralNode::DATETIME, $1);
+        $$ = setLoc(new LiteralNode(LiteralNode::DATETIME, $1));
         free($1);
     }
     | '(' expression ')' {
@@ -745,7 +774,7 @@ parameter_list
 
 parameter_declaration
     : declaration_specifiers declarator {
-        $$ = new ParameterNode();
+        $$ = setLoc(new ParameterNode());
         if ($1.type == nullptr) {
             yyerror("Parameter declaration requires a type specifier");
             $$->type = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::INT)); 
@@ -757,7 +786,7 @@ parameter_declaration
         $$->isModifiable = false;
     }
     | declaration_specifiers declarator MODIFIABLE {
-        $$ = new ParameterNode();
+        $$ = setLoc(new ParameterNode());
         if ($1.type == nullptr) {
             yyerror("Parameter declaration requires a type specifier");
             $$->type = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::INT));
@@ -769,7 +798,7 @@ parameter_declaration
         $$->isModifiable = true;
     }
     | declaration_specifiers declarator DEFAULT logical_or_expression {
-        $$ = new ParameterNode();
+        $$ = setLoc(new ParameterNode());
         if ($1.type == nullptr) {
             yyerror("Parameter declaration requires a type specifier");
             $$->type = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::INT));
@@ -782,7 +811,7 @@ parameter_declaration
         $$->isModifiable = false;
     }
     | declaration_specifiers {
-        $$ = new ParameterNode();
+        $$ = setLoc(new ParameterNode());
         if ($1.type == nullptr) {
             yyerror("Parameter declaration requires a type specifier");
             $$->type = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::VOID)); 
@@ -794,7 +823,7 @@ parameter_declaration
 
 function_definition
     : declaration_specifiers declarator compound_statement {
-        $$ = new FunctionDefinitionNode();
+        $$ = setLoc(new FunctionDefinitionNode());
         if ($1.storageClass & (1 << 16)) $$->storageClass = DeclarationNode::EXTERN;
         else if ($1.storageClass & (1 << 17)) $$->storageClass = DeclarationNode::STATIC;
         else $$->storageClass = DeclarationNode::NONE;
@@ -817,10 +846,11 @@ function_definition
 
 compound_statement
     : '{' '}' {
-        $$ = new CompoundStatementNode();
+        $$ = setLoc(new CompoundStatementNode());
     }
     | '{' block_item_list '}' {
         CompoundStatementNode* comp = new CompoundStatementNode();
+        setLoc(comp);
         comp->statements = std::move(*$2);
         delete $2;
         $$ = comp;
@@ -854,32 +884,33 @@ statement
 
 expression_statement
     : ';' {
-        $$ = new ExpressionStatementNode();
+        $$ = setLoc(new ExpressionStatementNode());
     }
     | expression ';' {
-        $$ = new ExpressionStatementNode(std::unique_ptr<ExpressionNode>($1));
+        $$ = setLoc(new ExpressionStatementNode(std::unique_ptr<ExpressionNode>($1)));
     }
     ;
 
 selection_statement
     : IF '(' expression ')' statement %prec NO_ELSE {
-        $$ = new IfStatementNode(std::unique_ptr<ExpressionNode>($3),
-                                std::unique_ptr<StatementNode>($5));
+        $$ = setLoc(new IfStatementNode(std::unique_ptr<ExpressionNode>($3),
+                                std::unique_ptr<StatementNode>($5)));
     }
     | IF '(' expression ')' statement ELSE statement {
-        $$ = new IfStatementNode(std::unique_ptr<ExpressionNode>($3),
+        $$ = setLoc(new IfStatementNode(std::unique_ptr<ExpressionNode>($3),
                                 std::unique_ptr<StatementNode>($5),
-                                std::unique_ptr<StatementNode>($7));
+                                std::unique_ptr<StatementNode>($7)));
     }
     ;
 
 iteration_statement
     : WHILE '(' expression ')' statement {
-        $$ = new WhileStatementNode(std::unique_ptr<ExpressionNode>($3),
-                                   std::unique_ptr<StatementNode>($5));
+        $$ = setLoc(new WhileStatementNode(std::unique_ptr<ExpressionNode>($3),
+                                   std::unique_ptr<StatementNode>($5)));
     }
     | FOR '(' expression_statement expression_statement ')' statement {
         ForStatementNode* forNode = new ForStatementNode(ForStatementNode::C_STYLE);
+        setLoc(forNode);
         
         ExpressionStatementNode* initStmt = dynamic_cast<ExpressionStatementNode*>($3);
         if (initStmt && initStmt->expression) {
@@ -898,6 +929,7 @@ iteration_statement
     }
     | FOR '(' expression_statement expression_statement expression ')' statement {
         ForStatementNode* forNode = new ForStatementNode(ForStatementNode::C_STYLE);
+        setLoc(forNode);
         
         ExpressionStatementNode* initStmt = dynamic_cast<ExpressionStatementNode*>($3);
         if (initStmt && initStmt->expression) {
@@ -917,6 +949,7 @@ iteration_statement
     }
     | FOR '(' type_specifier declarator FROM expression TO expression ')' statement {
         ForStatementNode* forNode = new ForStatementNode(ForStatementNode::FINEX_RANGE);
+        setLoc(forNode);
         forNode->varType = std::unique_ptr<TypeNode>($3);
         forNode->varName = $4->name;
         forNode->startExpr = std::unique_ptr<ExpressionNode>($6);
@@ -927,6 +960,7 @@ iteration_statement
     }
     | FOR '(' type_specifier declarator FROM expression TO expression STEP expression ')' statement {
         ForStatementNode* forNode = new ForStatementNode(ForStatementNode::FINEX_RANGE);
+        setLoc(forNode);
         forNode->varType = std::unique_ptr<TypeNode>($3);
         forNode->varName = $4->name;
         forNode->startExpr = std::unique_ptr<ExpressionNode>($6);
@@ -938,6 +972,7 @@ iteration_statement
     }
     | FOR '(' type_specifier declarator IN expression ')' statement {
         ForStatementNode* forNode = new ForStatementNode(ForStatementNode::FOR_IN);
+        setLoc(forNode);
         forNode->varType = std::unique_ptr<TypeNode>($3);
         forNode->varName = $4->name;
         forNode->collection = std::unique_ptr<ExpressionNode>($6);
@@ -949,23 +984,27 @@ iteration_statement
 
 jump_statement
     : CONTINUE ';' {
-        $$ = new JumpStatementNode(JumpStatementNode::CONTINUE);
+        $$ = setLoc(new JumpStatementNode(JumpStatementNode::CONTINUE));
     }
     | BREAK ';' {
-        $$ = new JumpStatementNode(JumpStatementNode::BREAK);
+        $$ = setLoc(new JumpStatementNode(JumpStatementNode::BREAK));
     }
     | RETURN expression ';' {
-        $$ = new JumpStatementNode(JumpStatementNode::RETURN,
-                                  std::unique_ptr<ExpressionNode>($2));
+        $$ = setLoc(new JumpStatementNode(JumpStatementNode::RETURN,
+                                  std::unique_ptr<ExpressionNode>($2)));
     }
     | RETURN ';' {
-        $$ = new JumpStatementNode(JumpStatementNode::RETURN);
+        $$ = setLoc(new JumpStatementNode(JumpStatementNode::RETURN));
+    }
+    | THROW expression ';' {
+        $$=setLoc(new JumpStatementNode(JumpStatementNode::THROW, std::unique_ptr<ExpressionNode>($2)));
     }
     ;
 
 exception_statement
     : TRY compound_statement CATCH '(' type_specifier declarator ')' compound_statement {
         TryCatchStatementNode* tryNode = new TryCatchStatementNode();
+        setLoc(tryNode);
         tryNode->tryBlock = std::unique_ptr<CompoundStatementNode>(
             dynamic_cast<CompoundStatementNode*>($2));
         tryNode->exceptionType = std::unique_ptr<TypeNode>($5);
@@ -977,6 +1016,7 @@ exception_statement
     }
     | TRY compound_statement CATCH '(' type_specifier ')' compound_statement {
         TryCatchStatementNode* tryNode = new TryCatchStatementNode();
+        setLoc(tryNode);
         tryNode->tryBlock = std::unique_ptr<CompoundStatementNode>(
             dynamic_cast<CompoundStatementNode*>($2));
         tryNode->exceptionType = std::unique_ptr<TypeNode>($5);
@@ -985,14 +1025,14 @@ exception_statement
         $$ = tryNode;
     }
     | CHECK '(' expression ')' ';' {
-        $$ = new CheckStatementNode(std::unique_ptr<ExpressionNode>($3));
+        $$ = setLoc(new CheckStatementNode(std::unique_ptr<ExpressionNode>($3)));
     }
     ;
 
 %%
 
 void yyerror(const char *s) {
-    fprintf(stderr, "Error: %s\n", s);
+    fprintf(stderr, "Error: %s at line %d, column %d\n", s, yylineno, columnno);
 }
 
 int main(int argc, char* argv[]) {
@@ -1009,8 +1049,26 @@ int main(int argc, char* argv[]) {
     if (yyparse() == 0) {
         printf("\n=== Parsing finished successfully ===\n\n");
         if (root) {
+            // 1. Print AST
             printf("=== AST Output ===\n");
             root->print();
+
+            // 2. Run Semantic Analysis
+            printf("\n=== Semantic Analysis ===\n");
+            SymbolTable symTab;
+
+            // Pass 1: Declaration Scan
+            printf("Running Pass 1: Declarations...\n");
+            DeclarationPass pass1(symTab);
+            root->accept(&pass1);
+
+            // Pass 2: Usage Checks
+            printf("Running Pass 2: Checks...\n");
+            SemanticPass pass2(symTab);
+            root->accept(&pass2);
+            
+            // Print Symbol Table state
+            symTab.print_table();
         }
     } else {
         fprintf(stderr, "Parsing failed.\n");
