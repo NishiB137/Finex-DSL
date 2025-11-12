@@ -10,13 +10,15 @@ TARGET = finex_parser
 LEX_SRC = lexer.l
 YACC_SRC = parser.y
 AST_SRC = ast.cpp
+SYMTAB_SRC = symbol_table.cpp
+SEMANTIC_SRC = semantic_analyzer.cpp
 
 LEX_OUT = lex.yy.c
 YACC_OUT = y.tab.c
 YACC_HDR = y.tab.h
 
 # Object files
-OBJS = y.tab.o lex.yy.o ast.o
+OBJS = y.tab.o lex.yy.o ast.o symbol_table.o semantic_analyzer.o
 
 all: $(TARGET)
 
@@ -29,7 +31,7 @@ y.tab.c y.tab.h: $(YACC_SRC)
 lex.yy.c: $(LEX_SRC) y.tab.h
 	$(LEX) $(LEX_SRC)
 
-y.tab.o: y.tab.c ast.hpp
+y.tab.o: y.tab.c ast.hpp symbol_table.hpp semantic_analyzer.hpp
 	$(CXX) $(CXXFLAGS) -c y.tab.c
 
 lex.yy.o: lex.yy.c y.tab.h
@@ -37,6 +39,12 @@ lex.yy.o: lex.yy.c y.tab.h
 
 ast.o: $(AST_SRC) ast.hpp
 	$(CXX) $(CXXFLAGS) -c $(AST_SRC)
+
+symbol_table.o: $(SYMTAB_SRC) symbol_table.hpp ast.hpp
+	$(CXX) $(CXXFLAGS) -c $(SYMTAB_SRC)
+
+semantic_analyzer.o: $(SEMANTIC_SRC) semantic_analyzer.hpp symbol_table.hpp ast.hpp
+	$(CXX) $(CXXFLAGS) -c $(SEMANTIC_SRC)
 
 clean:
 	rm -f $(TARGET) $(OBJS) $(LEX_OUT) $(YACC_OUT) $(YACC_HDR)

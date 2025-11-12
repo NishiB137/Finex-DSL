@@ -6,12 +6,13 @@
 #include <memory>
 #include <iostream>
 
-
 class ASTVisitor;
-
 
 class ASTNode {
 public:
+    int line = 0;    // Added line number
+    int column = 0;  // Added column number
+
     virtual ~ASTNode() = default;
     virtual void print(int indent = 0) const = 0;
     virtual void accept(ASTVisitor* visitor) = 0;
@@ -20,7 +21,6 @@ protected:
         for(int i = 0; i < indent; i++) std::cout << "  ";
     }
 };
-
 
 class TypeNode : public ASTNode {
 public:
@@ -42,7 +42,6 @@ public:
 private:
     std::string typeKindToString(TypeKind k) const;
 };
-
 
 class ExpressionNode : public ASTNode {
 public:
@@ -197,7 +196,6 @@ public:
     void print(int indent = 0) const override;
     void accept(ASTVisitor* visitor) override;
 };
-
 
 class StatementNode : public ASTNode {
 public:
