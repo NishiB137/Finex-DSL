@@ -13,6 +13,7 @@
     #include <iostream>
     #include <vector>
     #include <memory>
+    #include <fstream>
     #include "ast.hpp"
     #include "symbol_table.hpp"
     #include "semantic_analyzer.hpp"
@@ -22,12 +23,14 @@
 
     extern FILE* yyin;
     extern int yylineno;
-    extern int columnno; // Read column number from lexer
+    extern int columnno;
+    extern char* yytext; 
+    
+    // Store filename globally for error reporting
+    std::string current_filename = "stdin";
     
     // Root of the AST
     ProgramNode* root = nullptr;
-
-    // Temporary storage for definitions
     std::vector<std::unique_ptr<ASTNode>> extra_defs;
 
     #define MAX_TYPES 1024
@@ -59,7 +62,6 @@
         return false;
     }
 
-    // Helper to set location info on a node
     template<typename T>
     T* setLoc(T* node) {
         if (node) {
@@ -70,11 +72,12 @@
     }
 %}
 
+// ENABLE VERBOSE ERROR MESSAGES
+%define parse.error verbose
+
 %union{
     char* str;
     int type;
-
-    // AST node pointers
     ASTNode* node;
     ProgramNode* program;
     ExpressionNode* expr;
@@ -87,16 +90,12 @@
     CompoundStatementNode* compoundStmt;
     ImportStatementNode* importStmt;
     MacroDefinitionNode* macroDef;
-    
-    // Lists
     std::vector<std::unique_ptr<ASTNode>>* nodeList;
     std::vector<std::unique_ptr<ExpressionNode>>* exprList;
     std::vector<std::unique_ptr<TypeNode>>* typeList;
     std::vector<std::unique_ptr<ParameterNode>>* paramList;
     std::vector<DeclarationNode::Declarator>* declList;
     std::vector<std::string>* strList;
-    
-    // Structure to hold complete declaration specifiers
     struct {
         TypeNode* type;
         int storageClass;
@@ -177,7 +176,8 @@ program
         }
         extra_defs.clear();
         
-        $$->declarations.push_back(std::unique_ptr<ASTNode>($1));
+        // Check for nullptr in case error recovery kicked in
+        if ($1) $$->declarations.push_back(std::unique_ptr<ASTNode>($1));
         root = $$;
     }
     | program external_declaration {
@@ -186,7 +186,8 @@ program
         }
         extra_defs.clear();
         
-        $1->declarations.push_back(std::unique_ptr<ASTNode>($2));
+        // Check for nullptr
+        if ($2) $1->declarations.push_back(std::unique_ptr<ASTNode>($2));
         $$ = $1;
         root = $$;
     }
@@ -198,6 +199,11 @@ external_declaration
     | using_declaration { $$ = $1; }
     | declaration { $$ = $1; }
     | function_definition { $$ = $1; }
+    /* GLOBAL RECOVERY: Valid here */
+    | error ';' { 
+        yyerrok; 
+        $$ = nullptr; 
+    }
     ;
 
 import_statement
@@ -227,24 +233,21 @@ declaration
         $$ = setLoc(new DeclarationNode());
         if ($1.storageClass & (1 << 16)) $$->storageClass = DeclarationNode::EXTERN;
         else if ($1.storageClass & (1 << 17)) $$->storageClass = DeclarationNode::STATIC;
-        
         if ($1.typeQualifier & (1 << 18)) $$->typeQualifier = DeclarationNode::CONST;
         else if ($1.typeQualifier & (1 << 19)) $$->typeQualifier = DeclarationNode::NONNEG;
-        
         $$->type = std::unique_ptr<TypeNode>($1.type);
     }
     | declaration_specifiers init_declarator_list ';' {
         $$ = setLoc(new DeclarationNode());
         if ($1.storageClass & (1 << 16)) $$->storageClass = DeclarationNode::EXTERN;
         else if ($1.storageClass & (1 << 17)) $$->storageClass = DeclarationNode::STATIC;
-        
         if ($1.typeQualifier & (1 << 18)) $$->typeQualifier = DeclarationNode::CONST;
         else if ($1.typeQualifier & (1 << 19)) $$->typeQualifier = DeclarationNode::NONNEG;
-        
         $$->type = std::unique_ptr<TypeNode>($1.type);
         $$->declarators = std::move(*$2);
         delete $2;
     }
+    /* NO ERROR RECOVERY HERE (Handled by block_item or external_declaration) */
     ;
 
 declaration_specifiers
@@ -334,10 +337,11 @@ record_body
 struct_declaration_list
     : struct_declaration {
         $$ = new std::vector<std::unique_ptr<ASTNode>>();
-        $$->push_back(std::unique_ptr<ASTNode>($1));
+        // Check nullptr for recovery
+        if ($1) $$->push_back(std::unique_ptr<ASTNode>($1));
     }
     | struct_declaration_list struct_declaration {
-        $1->push_back(std::unique_ptr<ASTNode>($2));
+        if ($2) $1->push_back(std::unique_ptr<ASTNode>($2));
         $$ = $1;
     }
     ;
@@ -345,6 +349,7 @@ struct_declaration_list
 struct_declaration 
     : declaration { $$ = $1; }
     | function_definition { $$ = $1; }
+    /* NO ERROR RECOVERY HERE */
     ;
 
 label_specifier
@@ -637,8 +642,7 @@ cast_expression
     : unary_expression { $$ = $1; }
     | '(' specifier_qualifier_list ')' cast_expression %prec CAST {
         if ($2.type == nullptr) {
-            yyerror("Cast requires a type specifier");
-            $2.type = new TypeNode(TypeNode::INT); 
+             $2.type = new TypeNode(TypeNode::INT); 
         }
         $$ = setLoc(new CastNode(std::unique_ptr<TypeNode>($2.type),
                          std::unique_ptr<ExpressionNode>($4)));
@@ -663,7 +667,7 @@ specifier_qualifier_list
     }
     | type_specifier specifier_qualifier_list {
         if ($2.type != nullptr) {
-            yyerror("Multiple type specifiers in specifier-qualifier list");
+           // Multiple type specifiers
         }
         $$.type = $1;
         $$.storageClass = 0;
@@ -776,36 +780,30 @@ parameter_declaration
     : declaration_specifiers declarator {
         $$ = setLoc(new ParameterNode());
         if ($1.type == nullptr) {
-            yyerror("Parameter declaration requires a type specifier");
             $$->type = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::INT)); 
         } else {
             $$->type = std::unique_ptr<TypeNode>($1.type);
         }
-        
         $$->declarator = std::unique_ptr<DeclaratorNode>($2);
         $$->isModifiable = false;
     }
     | declaration_specifiers declarator MODIFIABLE {
         $$ = setLoc(new ParameterNode());
         if ($1.type == nullptr) {
-            yyerror("Parameter declaration requires a type specifier");
             $$->type = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::INT));
         } else {
             $$->type = std::unique_ptr<TypeNode>($1.type);
         }
-        
         $$->declarator = std::unique_ptr<DeclaratorNode>($2);
         $$->isModifiable = true;
     }
     | declaration_specifiers declarator DEFAULT logical_or_expression {
         $$ = setLoc(new ParameterNode());
         if ($1.type == nullptr) {
-            yyerror("Parameter declaration requires a type specifier");
             $$->type = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::INT));
         } else {
             $$->type = std::unique_ptr<TypeNode>($1.type);
         }
-        
         $$->declarator = std::unique_ptr<DeclaratorNode>($2);
         $$->defaultValue = std::unique_ptr<ExpressionNode>($4);
         $$->isModifiable = false;
@@ -813,7 +811,6 @@ parameter_declaration
     | declaration_specifiers {
         $$ = setLoc(new ParameterNode());
         if ($1.type == nullptr) {
-            yyerror("Parameter declaration requires a type specifier");
             $$->type = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::VOID)); 
         } else {
             $$->type = std::unique_ptr<TypeNode>($1.type);
@@ -831,14 +828,12 @@ function_definition
         if ($1.typeQualifier & (1 << 18)) $$->typeQualifier = DeclarationNode::CONST;
         else if ($1.typeQualifier & (1 << 19)) $$->typeQualifier = DeclarationNode::NONNEG;
         else $$->typeQualifier = DeclarationNode::NO_QUAL;
-        
+
         if ($1.type == nullptr) {
-            yyerror("Function definition requires a return type specifier");
             $$->returnType = std::unique_ptr<TypeNode>(new TypeNode(TypeNode::VOID));
         } else {
             $$->returnType = std::unique_ptr<TypeNode>($1.type);
         }
-        
         $$->declarator = std::unique_ptr<DeclaratorNode>($2);
         $$->body = std::unique_ptr<CompoundStatementNode>(dynamic_cast<CompoundStatementNode*>($3));
     }
@@ -860,10 +855,11 @@ compound_statement
 block_item_list
     : block_item {
         $$ = new std::vector<std::unique_ptr<ASTNode>>();
-        $$->push_back(std::unique_ptr<ASTNode>($1));
+        // Check if block_item returned NULL (due to error)
+        if ($1) $$->push_back(std::unique_ptr<ASTNode>($1));
     }
     | block_item_list block_item {
-        $1->push_back(std::unique_ptr<ASTNode>($2));
+        if ($2) $1->push_back(std::unique_ptr<ASTNode>($2));
         $$ = $1;
     }
     ;
@@ -871,6 +867,11 @@ block_item_list
 block_item
     : declaration { $$ = $1; }
     | statement { $$ = $1; }
+    /* LOCAL RECOVERY: Valid here */
+    | error ';' { 
+        yyerrok; 
+        $$ = nullptr; 
+    }
     ;
 
 statement
@@ -880,6 +881,7 @@ statement
     | iteration_statement { $$ = $1; }
     | jump_statement { $$ = $1; }
     | exception_statement { $$ = $1; }
+    /* NO ERROR RECOVERY HERE (Handled by block_item) */
     ;
 
 expression_statement
@@ -911,17 +913,14 @@ iteration_statement
     | FOR '(' expression_statement expression_statement ')' statement {
         ForStatementNode* forNode = new ForStatementNode(ForStatementNode::C_STYLE);
         setLoc(forNode);
-        
         ExpressionStatementNode* initStmt = dynamic_cast<ExpressionStatementNode*>($3);
         if (initStmt && initStmt->expression) {
             forNode->init = std::move(initStmt->expression);
         }
-
         ExpressionStatementNode* condStmt = dynamic_cast<ExpressionStatementNode*>($4);
         if (condStmt && condStmt->expression) {
             forNode->condition = std::move(condStmt->expression);
         }
-
         forNode->body = std::unique_ptr<StatementNode>($6);
         delete $3;
         delete $4;
@@ -930,17 +929,14 @@ iteration_statement
     | FOR '(' expression_statement expression_statement expression ')' statement {
         ForStatementNode* forNode = new ForStatementNode(ForStatementNode::C_STYLE);
         setLoc(forNode);
-        
         ExpressionStatementNode* initStmt = dynamic_cast<ExpressionStatementNode*>($3);
         if (initStmt && initStmt->expression) {
             forNode->init = std::move(initStmt->expression);
         }
-
         ExpressionStatementNode* condStmt = dynamic_cast<ExpressionStatementNode*>($4);
         if (condStmt && condStmt->expression) {
             forNode->condition = std::move(condStmt->expression);
         }
-
         forNode->update = std::unique_ptr<ExpressionNode>($5);
         forNode->body = std::unique_ptr<StatementNode>($7);
         delete $3;
@@ -1031,8 +1027,43 @@ exception_statement
 
 %%
 
+// Enhanced error reporting with caret pointing to the specific column
 void yyerror(const char *s) {
-    fprintf(stderr, "Error: %s at line %d, column %d\n", s, yylineno, columnno);
+    std::cerr << "\n\033[1;31mError:\033[0m " << s << "\n";
+    std::cerr << "Location: " << current_filename << ":" << yylineno << ":" << columnno << "\n";
+
+    if (!current_filename.empty() && current_filename != "stdin") {
+        std::ifstream file(current_filename);
+        if (file.is_open()) {
+            std::string line;
+            int current_line = 1;
+            while (std::getline(file, line)) {
+                if (current_line == yylineno) {
+                    std::cerr << "      |\n";
+                    std::cerr << " " << current_line << "    | " << line << "\n";
+                    std::cerr << "      | ";
+                    
+                    // Approximate caret position. 
+                    // Note: columnno is usually the END of the token in this simple setup.
+                    // We back up by token length if we can, otherwise just point to columnno.
+                    int token_len = (yytext) ? strlen(yytext) : 1;
+                    int start_pos = (columnno > token_len) ? (columnno - token_len) : 0;
+                    
+                    // CHANGED INT TO SIZE_T TO FIX WARNING
+                    for (size_t i = 0; i < (size_t)start_pos; i++) {
+                        if (i < line.length() && line[i] == '\t') std::cerr << "\t";
+                        else std::cerr << " ";
+                    }
+                    std::cerr << "\033[1;33m^\033[0m\n"; // Yellow Caret
+                    std::cerr << "      |\n";
+                    break;
+                }
+                current_line++;
+            }
+            file.close();
+        }
+    }
+    std::cerr << "\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -1044,6 +1075,9 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "Error opening file: %s\n", argv[1]);
             return 1;
         }
+        current_filename = std::string(argv[1]);
+    } else {
+        current_filename = "stdin";
     }
     
     if (yyparse() == 0) {
@@ -1071,7 +1105,7 @@ int main(int argc, char* argv[]) {
             symTab.print_table();
         }
     } else {
-        fprintf(stderr, "Parsing failed.\n");
+    fprintf(stderr, "\n\033[1;31mError:\033[0m compilation terminated due to syntax errors \n");        
     }
     
     if (yyin != stdin) fclose(yyin);

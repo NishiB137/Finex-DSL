@@ -1,17 +1,20 @@
 %{
-    #include<stdio.h>
-    #include<string.h>
-    #include<stdbool.h>
+    #include <stdio.h>
+    #include <string.h>
+    #include <stdbool.h>
+    #include "ast.hpp" 
     #include "y.tab.h"
 
-    int columnno = 0;
-    void count();
+    int columnno = 1;      // Start at column 1
+
+    void count(void);
     extern bool is_builtin_generic(const char *s);
     extern bool is_type_name(const char *s);
 %}
 
 %option yylineno
 %option nounput
+%option noinput
 
 INT        [0-9]+
 REAL       ([0-9]+[eE][+-]?[0-9]+)|(([0-9]*\.[0-9]+|[0-9]+\.[0-9]*)([eE][+-]?[0-9]+)?)
@@ -30,8 +33,9 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 "bool"             { count(); yylval.type = BOOL_T; return BOOL_T; }
 "datetime"         { count(); yylval.type = DATETIME_T; return DATETIME_T; }
 "amount"           { count(); yylval.type = AMOUNT_T; return AMOUNT_T; }
-"record"           { count(); yylval.type = RECORD; return RECORD; }    
+"record"           { count(); yylval.type = RECORD; return RECORD; } 
 "label"            { count(); yylval.type = LABEL; return LABEL; }
+
 "if"               { count(); return IF; }
 "else"             { count(); return ELSE; }
 "for"              { count(); return FOR; }
@@ -54,10 +58,11 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 "nonneg"           { count(); return NONNEG; }
 "extern"           { count(); return EXTERN; }
 "static"           { count(); return STATIC; }
-"using"            { count(); return USING; }  
-"define"            { count(); return DEFINE; }
+"using"            { count(); return USING; }
+"define"           { count(); return DEFINE; }
 "true"             { count(); yylval.str = strdup(yytext); return BOOL_LITERAL; }
 "false"            { count(); yylval.str = strdup(yytext); return BOOL_LITERAL; }
+
 "+"                { count(); return ('+'); }
 "-"                { count(); return ('-'); }
 "*"                { count(); return ('*'); }
@@ -71,7 +76,7 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 "-="               { count(); return MINUS_ASSIGN; }
 "*="               { count(); return MULT_ASSIGN; }
 "/="               { count(); return DIV_ASSIGN; }
-"//="               { count(); return INT_DIV_ASSIGN; }
+"//="              { count(); return INT_DIV_ASSIGN; }
 "%="               { count(); return MOD_ASSIGN; }
 "^="               { count(); return POWER_ASSIGN; }
 
@@ -88,6 +93,7 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 "not"              { count(); return NOT; }
 "in"               { count(); return IN; }
 "->"               { count(); return ARROW; }
+
 "{"                { count(); return ('{'); }
 "}"                { count(); return ('}'); }
 "("                { count(); return ('('); }
@@ -103,28 +109,13 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
 {DATETIME}         { count(); yylval.str = strdup(yytext); return DATETIME_LITERAL; }
 {REAL}             { count(); yylval.str = strdup(yytext); return REAL_LITERAL; }
 {INT}              { count(); yylval.str = strdup(yytext); return INT_LITERAL; }
-({REAL}|{INT}){CURRENCY}         { count(); yylval.str = strdup(yytext); return AMOUNT_LITERAL; }
+({REAL}|{INT}){CURRENCY} { count(); yylval.str = strdup(yytext); return AMOUNT_LITERAL; }
 {STRING}           { count(); yylval.str = strdup(yytext); return STRING_LITERAL; }
-{CHAR}             { count(); 
-                    /*
-                    if (yytext[1] == '\\') { 
-                        switch (yytext[2]) { 
-                            case 'n':  yylval = "\n"; break;
-                            case 't':  yylval = "\t"; break;
-                            case 'r':  yylval = "\r"; break;
-                            case '\'': yylval = "\'"; break;
-                            case '\\': yylval = "\\"; break;
-                            default:   strcpy(yylval, yytext+1, strlen(yytext)-2); break;
-                        }
-                    } else {
-                        yylval = yytext[1];
-                    }
-                    */
-                    yylval.str = strdup(yytext); 
-                    return CHAR_LITERAL;
-                    }
+{CHAR}             { count(); yylval.str = strdup(yytext); return CHAR_LITERAL; }
+
 {ID}        {
-                count(); yylval.str = strdup(yytext);
+                count();
+                yylval.str = strdup(yytext);
                 if (is_builtin_generic(yytext) || is_type_name(yytext)) {
                     return TYPE_NAME;
                 } else {
@@ -132,26 +123,33 @@ IMPORT_LIB  @(accounting|datastream|containers|statmodel)
                 }
             }
 
-
 [ \t\r\n]+                  { count(); }
 \/\#([^\#]|\#+[^\/])*\#\/   { count(); }    /* multi line comments */
-"##".* { count(); }   /* single line*/
-.                           { printf("Unknown token: %s at line %d, column %d\n", yytext, yylineno, columnno); }
-%%
+"##".* { count(); }    /* single line */
 
-
-void count()
-{
-	int i;
-	for (i = 0; yytext[i] != '\0'; i++)
-		if (yytext[i] == '\n')
-			columnno = 0;
-		else if (yytext[i] == '\t')
-			columnno += 8 - (columnno % 8);
-		else
-			columnno++;
+. { 
+    /* ERROR HANDLING: 
+       Print error AND return the char to parser so it fails. 
+    */
+    fprintf(stderr, "Lexer Error: Unknown character '%s' at line %d\n", yytext, yylineno);
+    count();
+    return yytext[0]; 
 }
 
-int yywrap(){
+%%
+
+void count(void) {
+    int i;
+    for (i = 0; yytext[i] != '\0'; i++) {
+        if (yytext[i] == '\n')
+            columnno = 1;
+        else if (yytext[i] == '\t')
+            columnno += 8 - (columnno % 8);
+        else
+            columnno++;
+    }
+}
+
+int yywrap() {
     return 1;
 }
