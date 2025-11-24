@@ -10,8 +10,8 @@ class ASTVisitor;
 
 class ASTNode {
 public:
-    int line = 0;    // Added line number
-    int column = 0;  // Added column number
+    int line = 0;    
+    int column = 0;  
 
     virtual ~ASTNode() = default;
     virtual void print(int indent = 0) const = 0;
@@ -35,16 +35,23 @@ public:
     
     TypeNode(TypeKind k) : kind(k) {}
     TypeNode(const std::string& name) : kind(USER_DEFINED), typeName(name) {}
-    
+
+    TypeNode(const TypeNode& other) : kind(other.kind), typeName(other.typeName) {
+        for (const auto& arg : other.genericArgs) {
+            genericArgs.push_back(std::make_unique<TypeNode>(*arg));
+        }
+    }
+
     void print(int indent = 0) const override;
     void accept(ASTVisitor* visitor) override;
-    
-private:
+
     std::string typeKindToString(TypeKind k) const;
 };
 
 class ExpressionNode : public ASTNode {
 public:
+    std::unique_ptr<TypeNode> resolvedType = nullptr;
+
     virtual ~ExpressionNode() = default;
 };
 
@@ -67,7 +74,6 @@ public:
     void print(int indent = 0) const override;
     void accept(ASTVisitor* visitor) override;
     
-private:
     std::string opToString(OpType o) const;
 };
 
@@ -143,8 +149,7 @@ public:
     
     void print(int indent = 0) const override;
     void accept(ASTVisitor* visitor) override;
-    
-private:
+
     std::string typeToString(LiteralType t) const;
 };
 

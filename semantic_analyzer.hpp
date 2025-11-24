@@ -39,7 +39,6 @@ public:
     void visit(ProgramNode* node) override {}
 };
 
-
 class DeclarationPass : public StubVisitor {
     SymbolTable& symTab;
 public:
@@ -52,9 +51,10 @@ public:
     void visit(TypeAliasNode* node) override;
 };
 
-
 class SemanticPass : public StubVisitor {
     SymbolTable& symTab;
+    TypeNode* currentFuncReturnType = nullptr; 
+
 public:
     SemanticPass(SymbolTable& st) : symTab(st) {}
 
@@ -64,29 +64,24 @@ public:
     void visit(DeclarationNode* node) override;
     void visit(ParameterNode* node) override;
     void visit(IdentifierNode* node) override;
-    
+    void visit(LiteralNode* node) override;
     void visit(IfStatementNode* node) override;
     void visit(WhileStatementNode* node) override;
     void visit(ExpressionStatementNode* node) override;
     void visit(AssignmentNode* node) override;
     void visit(BinaryOpNode* node) override;
     void visit(JumpStatementNode* node) override; 
-    
-
     void visit(ForStatementNode* node) override;
     void visit(TryCatchStatementNode* node) override;
     void visit(CheckStatementNode* node) override;
-    
-    // Expressions
     void visit(UnaryOpNode* node) override;
     void visit(FunctionCallNode* node) override;
-    void visit(CastNode* node) override;
     void visit(MemberAccessNode* node) override;
+    void visit(CastNode* node) override;
     void visit(SubscriptNode* node) override;
     void visit(InitializerListNode* node) override;
    
-
-    // Helper to visit a list of unique_ptr nodes
+    // Helper
     void visitChildren(const std::vector<std::unique_ptr<ASTNode>>& list);
 };
 
