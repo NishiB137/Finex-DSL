@@ -1,7 +1,33 @@
 #include "semantic_analyzer.hpp"
 #include <iostream>
+#include <algorithm>
 
-// pass 1
+
+std::unique_ptr<TypeNode> createType(TypeNode::TypeKind k) {
+    return std::make_unique<TypeNode>(k);
+}
+
+bool areTypesCompatible(TypeNode* target, TypeNode* source) {
+    if (!target || !source) return false;
+    
+    if (target->kind == source->kind) {
+        if (target->kind == TypeNode::USER_DEFINED) {
+            return target->typeName == source->typeName;
+        }
+        return true;
+    }
+
+    // Implicit Promotion: int -> real
+    if (target->kind == TypeNode::REAL && source->kind == TypeNode::INT) {
+        return true;
+    }
+
+    return false;
+}
+
+void reportError(int line, int col, const std::string& msg) {
+    std::cerr << "\033[1;31mSemantic Error\033[0m at " << line << ":" << col << ": " << msg << "\n";
+}
 
 void DeclarationPass::visit(ProgramNode* node) {
     for (const auto& decl : node->declarations) {
@@ -10,46 +36,39 @@ void DeclarationPass::visit(ProgramNode* node) {
 }
 
 void DeclarationPass::visit(FunctionDefinitionNode* node) {
-    // Register the function name in the Global Scope
+    // Store the entire function node in the symbol table so Pass 2 can check parameters
     if (!symTab.insert(node->declarator->name, SymbolKind::FUNCTION, node->returnType.get(), node, node->line, node->column)) {
-        std::cerr << "Error at " << node->line << ":" << node->column 
-                  << ": Function '" << node->declarator->name << "' is already declared.\n";
+        reportError(node->line, node->column, "Function '" + node->declarator->name + "' is already declared.");
     }
 }
 
 void DeclarationPass::visit(RecordDefinitionNode* node) {
+    // Store the record definition so Pass 2 can check members
     if (!symTab.insert(node->name, SymbolKind::TYPE_NAME, nullptr, node, node->line, node->column)) {
-        std::cerr << "Error at " << node->line << ":" << node->column 
-                  << ": Record '" << node->name << "' is already declared.\n";
+        reportError(node->line, node->column, "Record '" + node->name + "' is already declared.");
     }
 }
 
 void DeclarationPass::visit(LabelDefinitionNode* node) {
     if (!symTab.insert(node->name, SymbolKind::TYPE_NAME, nullptr, node, node->line, node->column)) {
-        std::cerr << "Error at " << node->line << ":" << node->column 
-                  << ": Label '" << node->name << "' is already declared.\n";
+        reportError(node->line, node->column, "Label '" + node->name + "' is already declared.");
     }
     for (const auto& val : node->values) {
-        // Values are strings, not nodes, so we use the LabelDefinitionNode's location
         if (!symTab.insert(val, SymbolKind::LABEL_VALUE, nullptr, nullptr, node->line, node->column)) {
-            std::cerr << "Error at " << node->line << ":" << node->column 
-                      << ": Label Value '" << val << "' conflicts with another symbol.\n";
+            reportError(node->line, node->column, "Label Value '" + val + "' conflicts with another symbol.");
         }
     }
 }
 
 void DeclarationPass::visit(TypeAliasNode* node) {
     if (!symTab.insert(node->alias, SymbolKind::TYPE_NAME, node->originalType.get(), node, node->line, node->column)) {
-        std::cerr << "Error at " << node->line << ":" << node->column 
-                  << ": Type Alias '" << node->alias << "' is already declared.\n";
+        reportError(node->line, node->column, "Type Alias '" + node->alias + "' is already declared.");
     }
 }
 
-// implementation
-
 void SemanticPass::visitChildren(const std::vector<std::unique_ptr<ASTNode>>& list) {
     for (const auto& node : list) {
-        node->accept(this);
+        if (node) node->accept(this);
     }
 }
 
@@ -61,16 +80,21 @@ void SemanticPass::visit(ProgramNode* node) {
 void SemanticPass::visit(FunctionDefinitionNode* node) {
     symTab.enter_scope();
     
+    // CONTEXT: Save return type for checking RETURN statements inside body
+    TypeNode* previousReturnType = currentFuncReturnType;
+    currentFuncReturnType = node->returnType.get();
+
     // Register parameters
     for (const auto& param : node->declarator->parameters) {
         param->accept(this); 
     }
 
-    // Visit body
     if (node->body) {
         visitChildren(node->body->statements);
     }
 
+    // Restore context
+    currentFuncReturnType = previousReturnType;
     symTab.exit_scope();
 }
 
@@ -82,32 +106,252 @@ void SemanticPass::visit(CompoundStatementNode* node) {
 
 void SemanticPass::visit(DeclarationNode* node) {
     for (const auto& decl : node->declarators) {
-        if (!symTab.insert(decl.declarator->name, SymbolKind::VARIABLE, node->type.get(), node, node->line, node->column)) {
-            std::cerr << "Error at " << node->line << ":" << node->column 
-                      << ": Variable '" << decl.declarator->name << "' redeclared in this scope.\n";
-        }
         if (decl.initializer) {
             decl.initializer->accept(this);
+            if (decl.initializer->resolvedType) {
+                if (!areTypesCompatible(node->type.get(), decl.initializer->resolvedType.get())) {
+                    std::string expected = node->type->typeKindToString(node->type->kind);
+                    std::string actual = decl.initializer->resolvedType->typeKindToString(decl.initializer->resolvedType->kind);
+                    reportError(node->line, node->column, 
+                        "Type mismatch in initialization of '" + decl.declarator->name + 
+                        "'. Expected " + expected + ", got " + actual);
+                }
+            }
+        }
+        if (!symTab.insert(decl.declarator->name, SymbolKind::VARIABLE, node->type.get(), node, node->line, node->column)) {
+            reportError(node->line, node->column, "Variable '" + decl.declarator->name + "' redeclared in this scope.");
         }
     }
 }
 
 void SemanticPass::visit(ParameterNode* node) {
     if (!symTab.insert(node->declarator->name, SymbolKind::PARAMETER, node->type.get(), node, node->line, node->column)) {
-        std::cerr << "Error at " << node->line << ":" << node->column 
-                  << ": Parameter '" << node->declarator->name << "' redeclared.\n";
+        reportError(node->line, node->column, "Parameter '" + node->declarator->name + "' redeclared.");
     }
 }
 
 void SemanticPass::visit(IdentifierNode* node) {
     Symbol* sym = symTab.lookup(node->name);
     if (!sym) {
-        std::cerr << "Error at " << node->line << ":" << node->column 
-                  << ": Undeclared identifier '" << node->name << "'\n";
-    } 
+        reportError(node->line, node->column, "Undeclared identifier '" + node->name + "'");
+        node->resolvedType = createType(TypeNode::VOID); 
+    } else {
+        if (sym->type) {
+            node->resolvedType = std::make_unique<TypeNode>(*sym->type);
+        } else {
+            node->resolvedType = createType(TypeNode::VOID);
+        }
+    }
 }
 
-// control flow visitor implementation
+void SemanticPass::visit(LiteralNode* node) {
+    switch(node->type) {
+        case LiteralNode::INT: node->resolvedType = createType(TypeNode::INT); break;
+        case LiteralNode::REAL: node->resolvedType = createType(TypeNode::REAL); break;
+        case LiteralNode::STRING: node->resolvedType = createType(TypeNode::STRING); break;
+        case LiteralNode::BOOL: node->resolvedType = createType(TypeNode::BOOL); break;
+        case LiteralNode::AMOUNT: node->resolvedType = createType(TypeNode::AMOUNT); break;
+        case LiteralNode::DATETIME: node->resolvedType = createType(TypeNode::DATETIME); break;
+        case LiteralNode::CHAR: node->resolvedType = createType(TypeNode::CHAR); break;
+        default: node->resolvedType = createType(TypeNode::VOID);
+    }
+}
+
+void SemanticPass::visit(FunctionCallNode* node) {
+    // 1. Check if function expression is valid (usually an Identifier)
+    node->function->accept(this);
+
+    IdentifierNode* funcId = dynamic_cast<IdentifierNode*>(node->function.get());
+    if (!funcId) {
+        reportError(node->line, node->column, "Complex function calls not supported yet.");
+        node->resolvedType = createType(TypeNode::VOID);
+        return;
+    }
+
+    Symbol* sym = symTab.lookup(funcId->name);
+    if (!sym || sym->kind != SymbolKind::FUNCTION) {
+        reportError(node->line, node->column, "Call to undefined function '" + funcId->name + "'");
+        node->resolvedType = createType(TypeNode::VOID);
+        return;
+    }
+
+    // 2. Retrieve definition to check parameters
+    FunctionDefinitionNode* funcDef = dynamic_cast<FunctionDefinitionNode*>(sym->definition);
+    if (!funcDef) {
+        // Fallback if definition not available (e.g. externs without body stored)
+        node->resolvedType = std::make_unique<TypeNode>(*sym->type); 
+        return; 
+    }
+
+    // 3. Check Argument Count
+    size_t paramCount = funcDef->declarator->parameters.size();
+    size_t argCount = node->arguments.size();
+
+    if (argCount != paramCount) {
+        reportError(node->line, node->column, 
+            "Incorrect argument count for function '" + funcId->name + 
+            "'. Expected " + std::to_string(paramCount) + ", got " + std::to_string(argCount));
+    }
+
+    // 4. Check Argument Types
+    size_t limit = std::min(argCount, paramCount);
+    for (size_t i = 0; i < limit; ++i) {
+        node->arguments[i]->accept(this); // Resolve argument type
+        
+        ParameterNode* param = funcDef->declarator->parameters[i].get();
+        if (node->arguments[i]->resolvedType && param->type) {
+            if (!areTypesCompatible(param->type.get(), node->arguments[i]->resolvedType.get())) {
+                 std::string pType = param->type->typeKindToString(param->type->kind);
+                 std::string aType = node->arguments[i]->resolvedType->typeKindToString(node->arguments[i]->resolvedType->kind);
+                 reportError(node->arguments[i]->line, node->arguments[i]->column, 
+                    "Type mismatch for argument " + std::to_string(i+1) + 
+                    " in call to '" + funcId->name + "'. Expected " + pType + ", got " + aType);
+            }
+        }
+    }
+
+    // 5. Set return type
+    if (funcDef->returnType) {
+        node->resolvedType = std::make_unique<TypeNode>(*funcDef->returnType);
+    } else {
+        node->resolvedType = createType(TypeNode::VOID);
+    }
+}
+
+void SemanticPass::visit(MemberAccessNode* node) {
+    // 1. Resolve the object (LHS)
+    if (node->object) node->object->accept(this);
+    
+    if (!node->object->resolvedType) {
+        node->resolvedType = createType(TypeNode::VOID);
+        return;
+    }
+
+    TypeNode* objType = node->object->resolvedType.get();
+
+    // 2. Ensure it is a USER_DEFINED type (Record)
+    if (objType->kind != TypeNode::USER_DEFINED) {
+        reportError(node->line, node->column, "Member access requested on non-record type.");
+        node->resolvedType = createType(TypeNode::VOID);
+        return;
+    }
+
+    // 3. Lookup the Record Definition
+    Symbol* recordSym = symTab.lookup(objType->typeName);
+    if (!recordSym || !recordSym->definition) {
+        reportError(node->line, node->column, "Undefined record type '" + objType->typeName + "'");
+        node->resolvedType = createType(TypeNode::VOID);
+        return;
+    }
+
+    RecordDefinitionNode* recDef = dynamic_cast<RecordDefinitionNode*>(recordSym->definition);
+    if (!recDef) {
+        node->resolvedType = createType(TypeNode::VOID);
+        return;
+    }
+
+    // 4. Search for the member in the record
+    bool memberFound = false;
+    for (const auto& member : recDef->members) {
+        // Records contain DeclarationNodes
+        DeclarationNode* decl = dynamic_cast<DeclarationNode*>(member.get());
+        if (decl) {
+            for (const auto& d : decl->declarators) {
+                if (d.declarator->name == node->member) {
+                    // Found it! Propagate type.
+                    if (decl->type) {
+                        node->resolvedType = std::make_unique<TypeNode>(*decl->type);
+                    }
+                    memberFound = true;
+                    break;
+                }
+            }
+        }
+        if (memberFound) break;
+    }
+
+    if (!memberFound) {
+        reportError(node->line, node->column, "Record '" + objType->typeName + "' has no member named '" + node->member + "'");
+        node->resolvedType = createType(TypeNode::VOID);
+    }
+}
+
+void SemanticPass::visit(BinaryOpNode* node) {
+    if (node->left) node->left->accept(this);
+    if (node->right) node->right->accept(this);
+
+    if (!node->left->resolvedType || !node->right->resolvedType) return;
+
+    TypeNode::TypeKind lKind = node->left->resolvedType->kind;
+    TypeNode::TypeKind rKind = node->right->resolvedType->kind;
+
+    if (lKind == TypeNode::INT && rKind == TypeNode::INT) {
+        node->resolvedType = createType(TypeNode::INT);
+    } 
+    else if ((lKind == TypeNode::INT && rKind == TypeNode::REAL) || 
+             (lKind == TypeNode::REAL && rKind == TypeNode::INT) ||
+             (lKind == TypeNode::REAL && rKind == TypeNode::REAL)) {
+        node->resolvedType = createType(TypeNode::REAL);
+    }
+    else if (lKind == TypeNode::STRING && rKind == TypeNode::STRING && node->op == BinaryOpNode::ADD) {
+        node->resolvedType = createType(TypeNode::STRING);
+    }
+    else if (node->op >= BinaryOpNode::EQ && node->op <= BinaryOpNode::OR) {
+         node->resolvedType = createType(TypeNode::BOOL);
+    }
+    else {
+         reportError(node->line, node->column, 
+            "Invalid binary operation '" + node->opToString(node->op) + 
+            "' between " + node->left->resolvedType->typeKindToString(lKind) + 
+            " and " + node->right->resolvedType->typeKindToString(rKind));
+         node->resolvedType = createType(TypeNode::VOID);
+    }
+}
+
+void SemanticPass::visit(AssignmentNode* node) {
+    if (node->lhs) node->lhs->accept(this);
+    if (node->rhs) node->rhs->accept(this);
+
+    if (!node->lhs->resolvedType || !node->rhs->resolvedType) return;
+
+    if (!areTypesCompatible(node->lhs->resolvedType.get(), node->rhs->resolvedType.get())) {
+        std::string lType = node->lhs->resolvedType->typeKindToString(node->lhs->resolvedType->kind);
+        std::string rType = node->rhs->resolvedType->typeKindToString(node->rhs->resolvedType->kind);
+        
+        reportError(node->line, node->column, 
+            "Cannot assign value of type " + rType + " to variable of type " + lType);
+    }
+    node->resolvedType = std::make_unique<TypeNode>(*node->lhs->resolvedType);
+}
+
+void SemanticPass::visit(JumpStatementNode* node) {
+    if (node->jumpType == JumpStatementNode::RETURN) {
+        if (node->returnValue) {
+            node->returnValue->accept(this);
+            
+            if (currentFuncReturnType) {
+                if (currentFuncReturnType->kind == TypeNode::VOID) {
+                    reportError(node->line, node->column, "Void function should not return a value.");
+                }
+                else if (node->returnValue->resolvedType && 
+                         !areTypesCompatible(currentFuncReturnType, node->returnValue->resolvedType.get())) {
+                    
+                    std::string expected = currentFuncReturnType->typeKindToString(currentFuncReturnType->kind);
+                    std::string actual = node->returnValue->resolvedType->typeKindToString(node->returnValue->resolvedType->kind);
+                    
+                    reportError(node->line, node->column, 
+                        "Return type mismatch. Expected " + expected + ", got " + actual);
+                }
+            }
+        } else {
+            // Return void
+            if (currentFuncReturnType && currentFuncReturnType->kind != TypeNode::VOID) {
+                std::string expected = currentFuncReturnType->typeKindToString(currentFuncReturnType->kind);
+                reportError(node->line, node->column, "Non-void function must return a value of type " + expected);
+            }
+        }
+    }
+}
 
 void SemanticPass::visit(IfStatementNode* node) {
     if (node->condition) node->condition->accept(this);
@@ -121,108 +365,48 @@ void SemanticPass::visit(WhileStatementNode* node) {
 }
 
 void SemanticPass::visit(ForStatementNode* node) {
-    if (node->forType == ForStatementNode::FINEX_RANGE || 
-        node->forType == ForStatementNode::FOR_IN) {
-        symTab.enter_scope(); 
-        
-        // Insert loop variable
-        if (!symTab.insert(node->varName, SymbolKind::VARIABLE, 
-                          node->varType.get(), node, node->line, node->column)) {
-            std::cerr << "Error at " << node->line << ":" << node->column 
-                      << ": Loop variable '" << node->varName << "' conflicts with existing symbol\n";
+    if (node->forType == ForStatementNode::FINEX_RANGE || node->forType == ForStatementNode::FOR_IN) {
+        symTab.enter_scope();
+        if (!symTab.insert(node->varName, SymbolKind::VARIABLE, node->varType.get(), node, node->line, node->column)) {
+             reportError(node->line, node->column, "Loop variable '" + node->varName + "' conflicts with existing symbol");
         }
-        
-        // Visit range expressions
         if (node->startExpr) node->startExpr->accept(this);
         if (node->endExpr) node->endExpr->accept(this);
         if (node->stepExpr) node->stepExpr->accept(this);
         if (node->collection) node->collection->accept(this);
-        
         if (node->body) node->body->accept(this);
-        
         symTab.exit_scope();
     } else {
-        // C-Style For
+        symTab.enter_scope();
         if (node->init) node->init->accept(this);
         if (node->condition) node->condition->accept(this);
         if (node->update) node->update->accept(this);
         if (node->body) node->body->accept(this);
-    }
-}
-
-void SemanticPass::visit(JumpStatementNode* node) {
-    if (node->returnValue) {
-        node->returnValue->accept(this);
-    }
-}
-
-void SemanticPass::visit(ExpressionStatementNode* node) {
-    if (node->expression) {
-        node->expression->accept(this);
-    }
-}
-
-void SemanticPass::visit(TryCatchStatementNode* node) {
-    if (node->tryBlock) node->tryBlock->accept(this);
-    
-    if (node->catchBlock) {
-        symTab.enter_scope(); // Manual scope for catch
-        
-        if (!node->exceptionVar.empty()) {
-            if (!symTab.insert(node->exceptionVar, SymbolKind::VARIABLE,
-                              node->exceptionType.get(), node, node->line, node->column)) {
-                std::cerr << "Error at " << node->line << ":" << node->column 
-                          << ": Exception variable '" << node->exceptionVar << "' redeclared\n";
-            }
-        }
-        
-        visitChildren(node->catchBlock->statements);
         symTab.exit_scope();
     }
 }
 
-void SemanticPass::visit(CheckStatementNode* node) {
-    if (node->condition) node->condition->accept(this);
+void SemanticPass::visit(ExpressionStatementNode* node) { if (node->expression) node->expression->accept(this); }
+void SemanticPass::visit(TryCatchStatementNode* node) { 
+    if (node->tryBlock) node->tryBlock->accept(this);
+    if (node->catchBlock) node->catchBlock->accept(this);
 }
-
-// expression visitor implementation
-
-void SemanticPass::visit(BinaryOpNode* node) {
-    if (node->left) node->left->accept(this);
-    if (node->right) node->right->accept(this);
-}
-
-void SemanticPass::visit(AssignmentNode* node) {
-    if (node->lhs) node->lhs->accept(this);
-    if (node->rhs) node->rhs->accept(this);
-}
-
-void SemanticPass::visit(UnaryOpNode* node) {
-    if (node->operand) node->operand->accept(this);
-}
-
-void SemanticPass::visit(FunctionCallNode* node) {
-    if (node->function) node->function->accept(this);
-    for (const auto& arg : node->arguments) {
-        arg->accept(this);
+void SemanticPass::visit(CheckStatementNode* node) { if (node->condition) node->condition->accept(this); }
+void SemanticPass::visit(UnaryOpNode* node) { 
+    if (node->operand) {
+        node->operand->accept(this);
+        if (node->operand->resolvedType) 
+            node->resolvedType = std::make_unique<TypeNode>(*node->operand->resolvedType);
     }
 }
-
-void SemanticPass::visit(CastNode* node) {
+void SemanticPass::visit(CastNode* node) { 
     if (node->expression) node->expression->accept(this);
+    if (node->targetType) node->resolvedType = std::make_unique<TypeNode>(*node->targetType);
 }
-
-void SemanticPass::visit(MemberAccessNode* node) {
-    if (node->object) node->object->accept(this);
+void SemanticPass::visit(SubscriptNode* node) { 
+    if (node->array) node->array->accept(this); 
+    if (node->index) node->index->accept(this); 
 }
-
-void SemanticPass::visit(SubscriptNode* node) {
-    if (node->array) node->array->accept(this);
-    if (node->index) node->index->accept(this);
-}
-
-void SemanticPass::visit(InitializerListNode* node) {
-    for (const auto& elem : node->elements) {
-        elem->accept(this);
-    }
+void SemanticPass::visit(InitializerListNode* node) { 
+    for(auto& e : node->elements) e->accept(this); 
 }
