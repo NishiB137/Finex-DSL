@@ -1,4 +1,4 @@
-#include "ast.hpp"
+#include "../Header_Files/ast.hpp"
 
 void TypeNode::print(int indent) const {
     printIndent(indent);

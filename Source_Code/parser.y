@@ -2,7 +2,7 @@
     #include <string>
     #include <vector>
     #include <memory>
-    #include "ast.hpp"
+    #include "../Header_Files/ast.hpp"
 }
 
 %{
@@ -14,9 +14,9 @@
     #include <vector>
     #include <memory>
     #include <fstream>
-    #include "ast.hpp"
-    #include "symbol_table.hpp"
-    #include "semantic_analyzer.hpp"
+    #include "../Header_Files/ast.hpp"
+    #include "../Header_Files/symbol_table.hpp"
+    #include "../Header_Files/semantic_analyzer.hpp"
     
     void yyerror(const char *s);
     int yylex();

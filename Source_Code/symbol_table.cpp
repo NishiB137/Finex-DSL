@@ -1,4 +1,4 @@
-#include "symbol_table.hpp"
+#include "../Header_Files/symbol_table.hpp"
 #include <iostream>
 
 // Symbol Constructor Implementation
