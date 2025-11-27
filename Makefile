@@ -10,7 +10,7 @@ SRC_DIR = Source_Code
 INC_DIR = Header_Files
 
 # Target executable
-TARGET = finex_parser
+TARGET = finex
 
 # Source files
 LEX_SRC = $(SRC_DIR)/lexer.l
