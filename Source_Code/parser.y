@@ -721,6 +721,14 @@ primary_expression
         $$ = setLoc(new IdentifierNode($1));
         free($1);
     }
+    | TYPE_NAME DCOLON IDENTIFIER {
+        IdentifierNode* typeId = new IdentifierNode($1);
+        setLoc(typeId);
+        $$ = setLoc(new MemberAccessNode(MemberAccessNode::DOUBLE_COLON,
+                                 std::unique_ptr<ExpressionNode>(typeId), $3));
+        free($1);
+        free($3);
+    }
     | INT_LITERAL {
         $$ = setLoc(new LiteralNode(LiteralNode::INT, $1));
         free($1);

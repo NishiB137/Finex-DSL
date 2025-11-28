@@ -49,11 +49,13 @@ public:
     void visit(RecordDefinitionNode* node) override;
     void visit(LabelDefinitionNode* node) override;
     void visit(TypeAliasNode* node) override;
+    void visit(MacroDefinitionNode* node) override;
 };
 
 class SemanticPass : public StubVisitor {
     SymbolTable& symTab;
     TypeNode* currentFuncReturnType = nullptr; 
+    int loopDepth = 0;
 
 public:
     SemanticPass(SymbolTable& st) : symTab(st) {}
